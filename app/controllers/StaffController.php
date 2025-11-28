@@ -29,6 +29,7 @@ class StaffController {
             $data['outstandingPenalties'] = $stats2['outstanding'] ?? 0;
 
             // 3. Get recent operational activity (Borrow/Return)
+            // Note: This only shows finalized loans (Borrowed/Returned), not pending reservations.
             $sql_activity = "
                 SELECT 
                     BR.BorrowDate AS ActionTimestamp, 
