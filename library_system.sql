@@ -372,7 +372,7 @@ CREATE TABLE `penalty` (
   `AmountDue` decimal(10,2) NOT NULL,
   `IssuedDate` datetime DEFAULT current_timestamp(),
   `PaidDate` datetime DEFAULT NULL,
-  `Status` enum('Pending','Paid') DEFAULT 'Pending'
+  `Status` enum('Pending','Paid', 'Waived') DEFAULT 'Pending'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 -- --------------------------------------------------------
