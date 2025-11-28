@@ -31,49 +31,47 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
             if ($action === 'Approve') {
                 // 1. Get the requested BookID and CopyID from the existing Borrow record
-                // UPDATED: 'borrowing_record' table
                 $stmt_get_loan_data = $pdo->prepare("SELECT CopyID FROM borrowing_record WHERE BorrowID = ?");
                 $stmt_get_loan_data->execute([$borrowID]);
                 $requested_copyID = $stmt_get_loan_data->fetchColumn();
 
-                // 2. Check for an AVAILABLE COPY in the book_copy table
+                // 2. Check the Copy Status (Should be 'Reserved' now, but we check if it exists)
                 $stmt_copy = $pdo->prepare("SELECT Status FROM book_copy WHERE CopyID = ?");
                 $stmt_copy->execute([$requested_copyID]);
                 $copy_status = $stmt_copy->fetchColumn();
 
-                if ($copy_status === 'Available') {
+                if ($copy_status === 'Reserved' || $copy_status === 'Available') {
 
-                    // 3. Update the book_copy Status
+                    // 3. Update the book_copy Status to Borrowed
                     $pdo->prepare("UPDATE book_copy SET Status = 'Borrowed' WHERE CopyID = ?")
                         ->execute([$requested_copyID]);
 
                     // 4. Update the borrowing_record Status
-                    // UPDATED: 'borrowing_record' table
                     $pdo->prepare("UPDATE borrowing_record SET Status = 'Borrowed', ProcessedBy = ? WHERE BorrowID = ? AND Status = 'Reserved'")
                         ->execute([$staffID, $borrowID]);
-
-                    // 5. Log the action - COMMENTED OUT as old Audit table is removed/repurposed
-                    // $logSql = "INSERT INTO Borrowing_Record (BorrowID, ActionType, ChangedBy) VALUES (?, 'Borrowed', ?)";
-                    // $pdo->prepare($logSql)->execute([$borrowID, $staffID]);
 
                     $status_message = "Request #{$borrowID} APPROVED. Book successfully loaned and inventory updated.";
                     $error_type = 'success';
 
                 } else {
-                    // Failure: The specific copy requested is no longer available (race condition, or logic error)
-                    $status_message = "Error: The specific copy is no longer available for loan.";
+                    $status_message = "Error: The specific copy is unavailable (Status: $copy_status).";
                     $error_type = 'error';
                 }
 
             } elseif ($action === 'Reject') {
-                // 1. Update borrowing_record status to 'Rejected' (or 'Cancelled') and set processor
-                // UPDATED: 'borrowing_record' table
+                // 1. Update borrowing_record status to 'Cancelled'
                 $pdo->prepare("UPDATE borrowing_record SET Status = 'Cancelled', ProcessedBy = ? WHERE BorrowID = ? AND Status = 'Reserved'")
                     ->execute([$staffID, $borrowID]);
 
-                // 2. Log the action - COMMENTED OUT
-                // $logSql = "INSERT INTO Borrowing_Record (BorrowID, ActionType, ChangedBy) VALUES (?, 'Rejected', ?)";
-                // $pdo->prepare($logSql)->execute([$borrowID, $staffID]);
+                // 2. [FIX] Release the book copy back to Available
+                $stmt_get_copy = $pdo->prepare("SELECT CopyID FROM borrowing_record WHERE BorrowID = ?");
+                $stmt_get_copy->execute([$borrowID]);
+                $linkedCopyID = $stmt_get_copy->fetchColumn();
+
+                if ($linkedCopyID) {
+                    $pdo->prepare("UPDATE book_copy SET Status = 'Available' WHERE CopyID = ?")
+                        ->execute([$linkedCopyID]);
+                }
 
                 $status_message = "Request #{$borrowID} REJECTED and closed.";
                 $error_type = 'error';

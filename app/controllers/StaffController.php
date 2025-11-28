@@ -17,9 +17,9 @@ class StaffController {
         ];
 
         try {
-            // 1. Get total pending borrowing requests (Status='Reserved')
-            // UPDATED: Using 'borrowing_record' table
-            $stmt1 = $this->pdo->query("SELECT COUNT(BorrowID) AS pending FROM borrowing_record WHERE Status = 'Reserved'");
+            // 1. Get total pending borrowing requests (From 'reservation' table)
+            // UPDATED: Now counting Active reservations
+            $stmt1 = $this->pdo->query("SELECT COUNT(ReservationID) AS pending FROM reservation WHERE Status = 'Active'");
             $stats1 = $stmt1->fetch();
             $data['pendingRequests'] = $stats1['pending'] ?? 0;
 
@@ -29,7 +29,6 @@ class StaffController {
             $data['outstandingPenalties'] = $stats2['outstanding'] ?? 0;
 
             // 3. Get recent operational activity (Borrow/Return)
-            // UPDATED: Now queries 'borrowing_record' directly instead of the old audit table
             $sql_activity = "
                 SELECT 
                     BR.BorrowDate AS ActionTimestamp, 

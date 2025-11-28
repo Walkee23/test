@@ -26,14 +26,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['cancel_id'])) {
         try {
             $pdo->beginTransaction();
             
-            // Verify ownership and status before cancelling
-            // UPDATED: Using 'borrowing_record' with status 'Reserved'
-            $stmt_check = $pdo->prepare("SELECT BorrowID FROM borrowing_record WHERE BorrowID = ? AND UserID = ? AND Status = 'Reserved'");
+            // Verify ownership and status before cancelling in 'reservation' table
+            $stmt_check = $pdo->prepare("SELECT ReservationID FROM reservation WHERE ReservationID = ? AND UserID = ? AND Status = 'Active'");
             $stmt_check->execute([$reservationID, $userID]);
             
             if ($stmt_check->fetch()) {
                 // Update status to Cancelled
-                $update_stmt = $pdo->prepare("UPDATE borrowing_record SET Status = 'Cancelled' WHERE BorrowID = ?");
+                $update_stmt = $pdo->prepare("UPDATE reservation SET Status = 'Cancelled' WHERE ReservationID = ?");
                 $update_stmt->execute([$reservationID]);
                 
                 $status_message = "Reservation cancelled successfully.";
@@ -64,18 +63,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['cancel_id'])) {
 $reservations = [];
 try {
     // Fetch Active reservations joined with Book details
-    // UPDATED: Fetching from 'borrowing_record' table where status is 'Reserved'
+    // UPDATED: Querying 'reservation' table
     $sql = "
         SELECT 
-            BO.BorrowID AS ReservationID, 
-            BO.BorrowDate AS ReservationDate, 
-            BO.DueDate AS ExpiryDate, 
-            BO.Status,
+            R.ReservationID, 
+            R.ReservationDate, 
+            R.ExpiryDate, 
+            R.Status,
             B.Title, B.Author, B.CoverImagePath
-        FROM borrowing_record BO
-        JOIN book B ON BO.BookID = B.BookID
-        WHERE BO.UserID = ? AND BO.Status = 'Reserved'
-        ORDER BY BO.DueDate ASC
+        FROM reservation R
+        JOIN book B ON R.BookID = B.BookID
+        WHERE R.UserID = ? AND R.Status = 'Active'
+        ORDER BY R.ExpiryDate ASC
     ";
     $stmt = $pdo->prepare($sql);
     $stmt->execute([$userID]);

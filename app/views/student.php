@@ -23,29 +23,32 @@ $hasOverdue = false;
 
 try {
     // 1. Get Count of Currently Borrowed Books
-    $stmt1 = $pdo->prepare("SELECT COUNT(BorrowID) FROM Borrow WHERE UserID = ? AND Status = 'Borrowed'");
+    // UPDATED: Table name 'borrowing_record'
+    $stmt1 = $pdo->prepare("SELECT COUNT(BorrowID) FROM borrowing_record WHERE UserID = ? AND Status = 'Borrowed'");
     $stmt1->execute([$userID]);
     $borrowedCount = $stmt1->fetchColumn();
 
     // 2. Get Count of Active Reservations
-    $stmt2 = $pdo->prepare("SELECT COUNT(ReservationID) FROM Reservation WHERE UserID = ? AND Status = 'Active'");
+    // UPDATED: Table name 'reservation'
+    $stmt2 = $pdo->prepare("SELECT COUNT(ReservationID) FROM reservation WHERE UserID = ? AND Status = 'Active'");
     $stmt2->execute([$userID]);
     $reservationCount = $stmt2->fetchColumn();
 
     // 3. Check for Overdue Books and Pending Penalties (Affecting Clearance)
+    // UPDATED: Table names 'borrowing_record' and 'penalty'
     $stmt3 = $pdo->prepare("
         SELECT 
             COUNT(BO.BorrowID) AS OverdueCount,
-            (SELECT SUM(AmountDue) FROM Penalty WHERE UserID = ? AND Status = 'Pending') AS PendingFees
-        FROM Borrow BO
+            (SELECT SUM(AmountDue) FROM penalty WHERE UserID = ? AND Status = 'Pending') AS PendingFees
+        FROM borrowing_record BO
         WHERE BO.UserID = ? AND BO.Status = 'Borrowed' AND BO.DueDate < NOW()
     ");
     $stmt3->execute([$userID, $userID]);
     $liabilities = $stmt3->fetch();
 
-    if ($liabilities['OverdueCount'] > 0 || $liabilities['PendingFees'] > 0.00) {
+    if (($liabilities['OverdueCount'] ?? 0) > 0 || ($liabilities['PendingFees'] ?? 0) > 0.00) {
         $clearanceStatus = 'On Hold';
-        $hasOverdue = $liabilities['OverdueCount'] > 0;
+        $hasOverdue = ($liabilities['OverdueCount'] ?? 0) > 0;
     }
 
 } catch (PDOException $e) {
@@ -411,7 +414,7 @@ try {
                         <h4 class="<?php echo $borrowedCount >= $borrowedbookLimit ? 'stat-bad' : 'stat-good'; ?>">
                             <?php echo $borrowedCount; ?>
                         </h4>
-                        <p>Active Books</p>
+                        <p>Active Borrowed Books</p>
                     </div>
 
                     <div class="metric-box">
@@ -441,13 +444,13 @@ try {
                     <div class="action-link-box">
                         <a href="student_borrow.php">
                             <span class="material-icons" style="margin-right: 10px;">search</span>
-                            Borrow Books
+                            Reserve Books
                         </a>
                     </div>
                     <div class="action-link-box">
                         <a href="studentborrowed_books.php">
                             <span class="material-icons" style="margin-right: 10px;">assignment_return</span>
-                            Return Books
+                            View Borrowed Books
                         </a>
                     </div>
                 </div>

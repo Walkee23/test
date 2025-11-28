@@ -34,14 +34,13 @@ $categories = [];
 
 // --- Fetch User Loan & Reservation Status ---
 // 1. Count currently borrowed books
-// UPDATED: Using 'borrowing_record'
 $stmt_borrowed = $pdo->prepare("SELECT COUNT(BorrowID) FROM borrowing_record WHERE UserID = ? AND Status = 'Borrowed'");
 $stmt_borrowed->execute([$userID]);
 $borrowedCount = $stmt_borrowed->fetchColumn();
 
-// 2. Count active reservations
-// UPDATED: Using 'borrowing_record' with Status='Reserved'
-$stmt_reserved = $pdo->prepare("SELECT COUNT(BorrowID) FROM borrowing_record WHERE UserID = ? AND Status = 'Reserved'");
+// 2. Count active reservations (Now checking the Reservation table)
+// UPDATED: Using 'reservation' table
+$stmt_reserved = $pdo->prepare("SELECT COUNT(ReservationID) FROM reservation WHERE UserID = ? AND Status = 'Active'");
 $stmt_reserved->execute([$userID]);
 $reservedCount = $stmt_reserved->fetchColumn();
 
@@ -53,12 +52,13 @@ try {
     $categories = $pdo->query("SELECT DISTINCT Category FROM book WHERE Category IS NOT NULL AND Category != '' ORDER BY Category ASC")->fetchAll(PDO::FETCH_COLUMN);
 
     // 2. Define the dynamic calculation fields
-    // UPDATED subqueries to use new table names
+    // Logic: A book is "Available to Reserve" if Physical Available Copies > Current Active Reservations by others
     $dynamic_fields = "
         B.BookID, B.Title, B.Author, B.ISBN, B.Price, B.CoverImagePath, B.Status, B.Category,
         (SELECT COUNT(BC1.CopyID) FROM book_copy BC1 WHERE BC1.BookID = B.BookID) AS CopiesTotal,
         (SELECT COUNT(BC2.CopyID) FROM book_copy BC2 WHERE BC2.BookID = B.BookID AND BC2.Status = 'Available') AS CopiesAvailable,
-        (SELECT COUNT(R.BorrowID) FROM borrowing_record R WHERE R.BookID = B.BookID AND R.UserID = {$userID} AND R.Status = 'Reserved') AS HasActiveReservation
+        (SELECT COUNT(R.ReservationID) FROM reservation R WHERE R.BookID = B.BookID AND R.Status = 'Active') AS TotalActiveReservations,
+        (SELECT COUNT(R2.ReservationID) FROM reservation R2 WHERE R2.BookID = B.BookID AND R2.UserID = {$userID} AND R2.Status = 'Active') AS UserHasActiveReservation
     ";
 
     // 3. Build the Base SQL Query
@@ -114,81 +114,62 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['book_id'])) {
     try {
         $pdo->beginTransaction();
 
-        // 1. Check Limit again
-        // UPDATED: Using 'borrowing_record'
-        $stmt_chk_b = $pdo->prepare("SELECT COUNT(*) FROM borrowing_record WHERE UserID = ? AND Status = 'Borrowed'");
-        $stmt_chk_b->execute([$userID]);
-        $curr_borrowed = $stmt_chk_b->fetchColumn();
-
-        $stmt_chk_r = $pdo->prepare("SELECT COUNT(*) FROM borrowing_record WHERE UserID = ? AND Status = 'Reserved'");
-        $stmt_chk_r->execute([$userID]);
-        $curr_reserved = $stmt_chk_r->fetchColumn();
-
-        if (($curr_borrowed + $curr_reserved) >= $limitMax) {
-            $status_message = "Denied: You have reached your limit of {$limitMax} books.";
-            $error_type = 'error';
-            $pdo->rollBack();
-        } else {
-            // 2. Check duplicate reservation
-            $stmt_exists = $pdo->prepare("SELECT BorrowID FROM borrowing_record WHERE UserID = ? AND BookID = ? AND Status = 'Reserved'");
-            $stmt_exists->execute([$userID, $bookID]);
-
-            if ($stmt_exists->fetch()) {
-                $status_message = "Error: You already have an active reservation for '{$bookTitle}'.";
-                $error_type = 'error';
-                $pdo->rollBack();
-            } else {
-                // 3. Find an Available Copy First
-                $stmt_copy = $pdo->prepare("SELECT CopyID FROM book_copy WHERE BookID = ? AND Status = 'Available' LIMIT 1");
-                $stmt_copy->execute([$bookID]);
-                $availableCopy = $stmt_copy->fetch();
-
-                if ($availableCopy) {
-                    $copyID = $availableCopy['CopyID'];
-                    // Use DueDate as a temporary placeholder for reservation expiry (3 days)
-                    $expiryDate = date('Y-m-d H:i:s', strtotime('+3 days'));
-
-                    // UPDATED: INSERT into 'borrowing_record' with Status 'Reserved'
-                    $stmt_insert = $pdo->prepare("INSERT INTO borrowing_record (UserID, BookID, CopyID, DueDate, Status) VALUES (?, ?, ?, ?, 'Reserved')");
-                    $stmt_insert->execute([$userID, $bookID, $copyID, $expiryDate]);
-
-                    $status_message = "Success! A reservation has been placed. Please wait for staff approval.";
-                    $error_type = 'success';
-                    $pdo->commit();
-                } else {
-                    $status_message = "Error: No copies are currently available to reserve.";
-                    $error_type = 'error';
-                    $pdo->rollBack();
-                }
-            }
+        // 1. Check User Limit
+        if ($maxedOut) {
+            throw new Exception("Denied: You have reached your limit of {$limitMax} books.");
         }
 
-        // 1. Capture the page and search term from the form
+        // 2. Check Duplicate Reservation in 'reservation' table
+        $stmt_exists = $pdo->prepare("SELECT ReservationID FROM reservation WHERE UserID = ? AND BookID = ? AND Status = 'Active'");
+        $stmt_exists->execute([$userID, $bookID]);
+        if ($stmt_exists->fetch()) {
+            throw new Exception("Error: You already have an active reservation for '{$bookTitle}'.");
+        }
+
+        // 3. Check Availability logic: Are there enough copies for existing reservations + this new one?
+        // Count physical available copies
+        $stmt_avail = $pdo->prepare("SELECT COUNT(CopyID) FROM book_copy WHERE BookID = ? AND Status = 'Available'");
+        $stmt_avail->execute([$bookID]);
+        $physicallyAvailable = $stmt_avail->fetchColumn();
+
+        // Count existing active reservations for this book
+        $stmt_active_res = $pdo->prepare("SELECT COUNT(ReservationID) FROM reservation WHERE BookID = ? AND Status = 'Active'");
+        $stmt_active_res->execute([$bookID]);
+        $existingReservations = $stmt_active_res->fetchColumn();
+
+        if ($physicallyAvailable > $existingReservations) {
+            // Success: We can reserve
+            $expiryDate = date('Y-m-d H:i:s', strtotime('+3 days')); // 3 Day reservation validity
+
+            // UPDATED: Insert into 'reservation' table
+            $stmt_insert = $pdo->prepare("INSERT INTO reservation (UserID, BookID, ExpiryDate, Status) VALUES (?, ?, ?, 'Active')");
+            $stmt_insert->execute([$userID, $bookID, $expiryDate]);
+
+            $status_message = "Success! Reservation placed. Please wait for staff approval.";
+            $error_type = 'success';
+            $pdo->commit();
+        } else {
+            throw new Exception("Error: No copies available. All available copies are currently reserved by other students.");
+        }
+
+        // Redirect logic
         $redirectPage = filter_input(INPUT_POST, 'page', FILTER_VALIDATE_INT) ?: 1;
         $redirectSearch = trim($_POST['search'] ?? '');
-
-        // 2. Build the URL with these parameters
-        $url = "student_borrow.php?msg=" . urlencode($status_message) . 
-               "&type={$error_type}" . 
-               "&page={$redirectPage}";
-        
-        if (!empty($redirectSearch)) {
-            $url .= "&search=" . urlencode($redirectSearch);
-        }
+        $url = "student_borrow.php?msg=" . urlencode($status_message) . "&type={$error_type}&page={$redirectPage}";
+        if (!empty($redirectSearch)) $url .= "&search=" . urlencode($redirectSearch);
 
         header("Location: " . $url);
         ob_end_flush();
         exit();
 
-    } catch (PDOException $e) {
-        if ($pdo->inTransaction()) {
-            $pdo->rollBack();
-        }
-        error_log("Reserve Error: " . $e->getMessage());
-        $status_message = "System Error: Your request could not be processed.";
+    } catch (Exception $e) {
+        $pdo->rollBack();
+        $status_message = $e->getMessage();
         $error_type = 'error';
-
-        header("Location: student_borrow.php?msg=" . urlencode($status_message) . "&type={$error_type}");
+        
+        // Redirect logic for error
+        $redirectPage = filter_input(INPUT_POST, 'page', FILTER_VALIDATE_INT) ?: 1;
+        header("Location: student_borrow.php?msg=" . urlencode($status_message) . "&type={$error_type}&page={$redirectPage}");
         ob_end_flush();
         exit();
     }
@@ -761,8 +742,15 @@ if (isset($_GET['msg'])) {
                         <?php else: ?>
                             <?php
                             foreach ($book_inventory as $book):
-                                $isAvailable = $book['CopiesAvailable'] > 0;
-                                $stockText = $isAvailable ? "{$book['CopiesAvailable']} available" : "Out of Stock";
+                                // Use the calculated fields from query
+                                $availCopies = (int)$book['CopiesAvailable'];
+                                $reservationsForBook = (int)$book['TotalActiveReservations'];
+                                
+                                // Logic: A book is effectively available if phys copies > active reservations
+                                $effectiveAvailability = $availCopies - $reservationsForBook;
+                                $isAvailable = $effectiveAvailability > 0;
+                                
+                                $stockText = $isAvailable ? "{$effectiveAvailability} available" : "Out of Stock";
                                 $stockClass = $isAvailable ? 'stock-available' : 'stock-low';
 
                                 // Fix for image loading (OpenLibrary vs Local)
@@ -774,14 +762,18 @@ if (isset($_GET['msg'])) {
                                 }
 
                                 // Button Logic
-                                $hasActiveReservation = $book['HasActiveReservation'] > 0;
+                                $userHasActive = $book['UserHasActiveReservation'] > 0;
 
-                                if ($hasActiveReservation) {
+                                if ($userHasActive) {
                                     $buttonText = "Already Reserved";
                                     $buttonClass = "reserved-tag";
                                     $isDisabled = true;
                                 } elseif ($maxedOut) {
                                     $buttonText = "Limit Reached";
+                                    $buttonClass = "disabled-btn";
+                                    $isDisabled = true;
+                                } elseif (!$isAvailable) {
+                                    $buttonText = "Reserved by Others";
                                     $buttonClass = "disabled-btn";
                                     $isDisabled = true;
                                 } else {
