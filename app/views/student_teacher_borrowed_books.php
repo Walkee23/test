@@ -3,24 +3,21 @@
 ob_start();
 session_start();
 
-// --- 1. Include Config FIRST to define BASE_URL ---
 require_once __DIR__ . '/../../config.php';
 require_once __DIR__ . '/../models/database.php';
 
-// --- 2. Authentication Check ---
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'Student') {
+// --- Authentication Check ---
+// Allow both 'Student' and 'Teacher' roles
+if (!isset($_SESSION['user_id']) || !in_array($_SESSION['role'], ['Student', 'Teacher'])) {
     header("Location: " . BASE_URL . "/views/login.php");
     ob_end_flush();
     exit();
 }
 
-$student_name = $_SESSION['name'] ?? 'Student';
 $userID = $_SESSION['user_id'];
 $borrowedBooks = [];
 
 try {
-    // Fetch currently borrowed books (Status = 'Borrowed')
-    // UPDATED: Using 'borrowing_record', 'book_copy', 'book'
     $sql = "
         SELECT 
             BK.Title, 
@@ -36,7 +33,6 @@ try {
     $stmt = $pdo->prepare($sql);
     $stmt->execute([$userID]);
     $borrowedBooks = $stmt->fetchAll();
-
 } catch (PDOException $e) {
     error_log("Fetch Borrowed Books Error: " . $e->getMessage());
 }
@@ -69,7 +65,6 @@ try {
             min-height: 100vh;
         }
 
-        /* Sidebar */
         .sidebar {
             width: 70px;
             padding: 30px 0;
@@ -82,7 +77,6 @@ try {
             left: 0;
             z-index: 100;
             overflow-x: hidden;
-            overflow-y: auto;
             transition: width 0.5s ease;
             white-space: nowrap;
         }
@@ -90,26 +84,6 @@ try {
         .sidebar.active {
             width: 280px;
         }
-
-        .logo {
-            font-size: 19px;
-            font-weight: bold;
-            color: #000;
-            padding: 0 23px 40px;
-            display: flex;
-            align-items: center;
-            cursor: pointer;
-        }
-
-        .logo-text {
-            opacity: 0;
-            transition: opacity 0.1s ease;
-            margin-left: 10px;
-        }
-
-        .sidebar.active .logo-text { opacity: 1; }
-        .text { opacity: 0; transition: opacity 0.1s ease; margin-left: 5px; }
-        .sidebar.active .text { opacity: 1; }
 
         .nav-list {
             list-style: none;
@@ -121,10 +95,10 @@ try {
             display: flex;
             align-items: center;
             font-size: 15px;
-            padding: 15px 24px 15px;
-            text-decoration: none;
+            padding: 15px 24px;
             color: #6C6C6C;
-            transition: background-color 0.2s;
+            text-decoration: none;
+            transition: 0.2s;
         }
 
         .nav-item.active a {
@@ -141,20 +115,37 @@ try {
 
         .logout {
             margin-top: 260px;
-            cursor: pointer;
         }
 
         .logout a {
+            color: #e94343;
             display: flex;
             align-items: center;
-            font-size: 15px;
-            padding: 15px 24px 15px;
-            color: #e94343ff;
+            padding: 15px 24px;
             text-decoration: none;
-            transition: background-color 0.2s;
         }
 
-        /* Main Content */
+        .logo {
+            font-size: 19px;
+            font-weight: bold;
+            padding: 0 23px 40px;
+            display: flex;
+            align-items: center;
+            cursor: pointer;
+        }
+
+        .logo-text,
+        .text {
+            opacity: 0;
+            transition: opacity 0.1s;
+            margin-left: 10px;
+        }
+
+        .sidebar.active .logo-text,
+        .sidebar.active .text {
+            opacity: 1;
+        }
+
         .main-content {
             flex-grow: 1;
             padding: 30px 32px;
@@ -167,18 +158,16 @@ try {
             margin-left: 280px;
         }
 
-        /* Borrowed Section */
         .borrowed-section h2 {
             font-size: 25px;
             font-weight: 700;
-            margin-bottom: 7px;
-            margin-top: 0;
+            margin: 0 0 7px;
         }
 
         .borrowed-section p.subtitle {
             font-size: 15px;
             color: #666;
-            margin-bottom: 30px;
+            margin: 0 0 30px;
         }
 
         .section-title {
@@ -188,11 +177,10 @@ try {
             color: #333;
         }
 
-        /* Table Styling */
         .borrowed-list-table {
             width: 100%;
             border-collapse: collapse;
-            background-color: #fff;
+            background: #fff;
             border-radius: 8px;
             overflow: hidden;
             box-shadow: 0 2px 5px rgba(0, 0, 0, 0.05);
@@ -207,25 +195,15 @@ try {
         }
 
         .borrowed-list-table th {
-            background-color: #f8f9fa;
+            background: #f8f9fa;
             font-weight: 600;
             font-size: 14px;
             color: #6C6C6C;
             text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-
-        .borrowed-list-table td {
-            font-size: 15px;
-            color: #333;
-        }
-
-        .borrowed-list-table tbody tr:last-child td {
-            border-bottom: none;
         }
 
         .borrowed-list-table tbody tr:hover {
-            background-color: #fafafa;
+            background: #fafafa;
         }
 
         .book-title {
@@ -233,7 +211,7 @@ try {
             color: #333;
             display: block;
         }
-        
+
         .book-author {
             font-size: 13px;
             color: #888;
@@ -245,42 +223,39 @@ try {
         }
 
         .due-date-text {
-            color: #E5A000; /* Orange hint for due date */
+            color: #E5A000;
             font-weight: 600;
         }
-        
+
         .overdue-text {
             color: #d32f2f;
             font-weight: 700;
         }
-
     </style>
 </head>
 
 <body>
-
     <div class="container">
-        <!-- Sidebar -->
         <div id="sidebar-menu" class="sidebar">
             <div class="logo" onclick="toggleSidebar()">
                 <span class="nav-icon material-icons">menu</span>
                 <span class="logo-text">📚 Smart Library</span>
             </div>
-            
+
             <ul class="nav-list">
-                <li class="nav-item"><a href="student.php">
+                <li class="nav-item"><a href="student_teacher.php">
                         <span class="nav-icon material-icons">dashboard</span>
                         <span class="text">Dashboard</span>
                     </a></li>
-                <li class="nav-item"><a href="student_borrow.php">
+                <li class="nav-item"><a href="student_teacher_borrow.php">
                         <span class="nav-icon material-icons">local_library</span>
                         <span class="text">Books</span>
                     </a></li>
-                <li class="nav-item"><a href="student_reservation.php">
+                <li class="nav-item"><a href="student_teacher_reservation.php">
                         <span class="nav-icon material-icons">bookmark_add</span>
                         <span class="text">Reservations</span>
                     </a></li>
-                <li class="nav-item active"><a href="studentborrowed_books.php">
+                <li class="nav-item active"><a href="student_teacher_borrowed_books.php">
                         <span class="nav-icon material-icons">menu_book</span>
                         <span class="text">Borrowed Books</span>
                     </a>
@@ -294,15 +269,14 @@ try {
             </ul>
         </div>
 
-        <!-- Main Content -->
         <div id="main-content-area" class="main-content">
-
             <div class="borrowed-section">
                 <h2>Your Borrowed Books</h2>
                 <p class="subtitle">Manage the status and due dates of your active loans.</p>
 
+                <!-- Dynamic Title based on role -->
                 <div class="section-title">
-                    Active Loans (<?php echo count($borrowedBooks); ?>/3)
+                    Active Loans (<?php echo count($borrowedBooks); ?><?php echo ($_SESSION['role'] === 'Student') ? '/3' : ''; ?>)
                 </div>
 
                 <table class="borrowed-list-table">
@@ -321,24 +295,24 @@ try {
                                 </td>
                             </tr>
                         <?php else: ?>
-                            <?php 
-                            foreach ($borrowedBooks as $book): 
+                            <?php
+                            foreach ($borrowedBooks as $book):
                                 $borrowDate = new DateTime($book['BorrowDate']);
                                 $dueDate = new DateTime($book['DueDate']);
                                 $today = new DateTime();
                                 $isOverdue = $today > $dueDate;
                             ?>
-                            <tr>
-                                <td>
-                                    <span class="book-title"><?php echo htmlspecialchars($book['Title']); ?></span>
-                                    <span class="book-author">By: <?php echo htmlspecialchars($book['Author']); ?></span>
-                                </td>
-                                <td class="date-text"><?php echo $borrowDate->format('M d, Y'); ?></td>
-                                <td class="<?php echo $isOverdue ? 'overdue-text' : 'due-date-text'; ?>">
-                                    <?php echo $dueDate->format('M d, Y'); ?>
-                                    <?php if($isOverdue) echo " (Overdue)"; ?>
-                                </td>
-                            </tr>
+                                <tr>
+                                    <td>
+                                        <span class="book-title"><?php echo htmlspecialchars($book['Title']); ?></span>
+                                        <span class="book-author">By: <?php echo htmlspecialchars($book['Author']); ?></span>
+                                    </td>
+                                    <td class="date-text"><?php echo $borrowDate->format('M d, Y'); ?></td>
+                                    <td class="<?php echo $isOverdue ? 'overdue-text' : 'due-date-text'; ?>">
+                                        <?php echo $dueDate->format('M d, Y'); ?>
+                                        <?php if ($isOverdue) echo " (Overdue)"; ?>
+                                    </td>
+                                </tr>
                             <?php endforeach; ?>
                         <?php endif; ?>
                     </tbody>
@@ -353,20 +327,22 @@ try {
             const mainContent = document.getElementById('main-content-area');
             sidebar.classList.toggle('active');
             mainContent.classList.toggle('pushed');
-            
             if (sidebar.classList.contains('active')) {
                 localStorage.setItem('sidebarState', 'expanded');
             } else {
                 localStorage.setItem('sidebarState', 'collapsed');
             }
         }
-
         document.addEventListener('DOMContentLoaded', () => {
             const savedState = localStorage.getItem('sidebarState');
             if (savedState === 'expanded') {
-                toggleSidebar();
+                const sidebar = document.getElementById('sidebar-menu');
+                const mainContent = document.getElementById('main-content-area');
+                sidebar.classList.add('active');
+                mainContent.classList.add('pushed');
             }
         });
     </script>
 </body>
+
 </html>
