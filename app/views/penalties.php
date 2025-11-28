@@ -34,12 +34,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['penalty_id'])) {
 
             if ($action === 'Collect') {
                 // 1. Update Penalty Status to Paid and set PaidDate
-                $pdo->prepare("UPDATE Penalty SET Status = 'Paid', PaidDate = CURRENT_TIMESTAMP() WHERE PenaltyID = ? AND Status = 'Pending'")
+                // UPDATED: 'penalty' table
+                $pdo->prepare("UPDATE penalty SET Status = 'Paid', PaidDate = CURRENT_TIMESTAMP() WHERE PenaltyID = ? AND Status = 'Pending'")
                     ->execute([$penaltyID]);
                 
                 // 2. Insert a record into the Payment table
-                $pdo->prepare("INSERT INTO Payment (UserID, PenaltyID, Amount, Status) 
-                               VALUES (?, ?, (SELECT AmountDue FROM Penalty WHERE PenaltyID = ?), 'Completed')")
+                // UPDATED: 'payment' table
+                $pdo->prepare("INSERT INTO payment (UserID, PenaltyID, Amount, Status) 
+                               VALUES (?, ?, (SELECT AmountDue FROM penalty WHERE PenaltyID = ?), 'Completed')")
                     ->execute([$staffID, $penaltyID, $penaltyID]);
 
                 $status_message = "Penalty #{$penaltyID} collected successfully and marked PAID.";
@@ -47,7 +49,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['penalty_id'])) {
 
             } elseif ($action === 'Waive') {
                 // 1. Update Penalty Status to Waived
-                $pdo->prepare("UPDATE Penalty SET Status = 'Waived', PaidDate = CURRENT_TIMESTAMP() WHERE PenaltyID = ? AND Status = 'Pending'")
+                // UPDATED: 'penalty' table
+                $pdo->prepare("UPDATE penalty SET Status = 'Waived', PaidDate = CURRENT_TIMESTAMP() WHERE PenaltyID = ? AND Status = 'Pending'")
                     ->execute([$penaltyID]);
                 
                 $status_message = "Penalty #{$penaltyID} waived and closed.";
@@ -73,17 +76,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['penalty_id'])) {
 
 // --- 2. FETCH PENALTIES (Dynamic Query) ---
 try {
+    // UPDATED: 'penalty', 'users', 'borrowing_record', 'book_copy', 'book'
     $sql = "
         SELECT 
             P.PenaltyID, P.AmountDue, P.Status, P.IssuedDate,
             U.Name AS BorrowerName, U.Role AS BorrowerRole,
             BK.Title, BK.ISBN
-        FROM Penalty P
-        JOIN Users U ON P.UserID = U.UserID
-        JOIN Borrow BO ON P.BorrowID = BO.BorrowID
-        -- FIX: Join Book via the CopyID's BookID
-        JOIN Book_Copy BCPY ON BO.CopyID = BCPY.CopyID 
-        JOIN Book BK ON BCPY.BookID = BK.BookID
+        FROM penalty P
+        JOIN users U ON P.UserID = U.UserID
+        JOIN borrowing_record BO ON P.BorrowID = BO.BorrowID
+        JOIN book_copy BCPY ON BO.CopyID = BCPY.CopyID 
+        JOIN book BK ON BCPY.BookID = BK.BookID
         WHERE 1=1
     ";
 
@@ -452,7 +455,7 @@ try {
         .status-box {
             padding: 15px; 
             margin-bottom: 20px; 
-            border-radius: 8px;
+            border-radius: 8px; 
             width: 100%; 
             max-width: 1100px;
             font-weight: 600;

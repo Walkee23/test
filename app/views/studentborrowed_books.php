@@ -20,16 +20,16 @@ $borrowedBooks = [];
 
 try {
     // Fetch currently borrowed books (Status = 'Borrowed')
-    // Joining Borrow -> Book_Copy -> Book to get details
+    // UPDATED: Using 'borrowing_record', 'book_copy', 'book'
     $sql = "
         SELECT 
             BK.Title, 
             BK.Author,
             BO.BorrowDate, 
             BO.DueDate
-        FROM Borrow BO
-        JOIN Book_Copy BC ON BO.CopyID = BC.CopyID
-        JOIN Book BK ON BC.BookID = BK.BookID
+        FROM borrowing_record BO
+        JOIN book_copy BC ON BO.CopyID = BC.CopyID
+        JOIN book BK ON BC.BookID = BK.BookID
         WHERE BO.UserID = ? AND BO.Status = 'Borrowed'
         ORDER BY BO.DueDate ASC
     ";

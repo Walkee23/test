@@ -31,28 +31,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
             if ($action === 'Approve') {
                 // 1. Get the requested BookID and CopyID from the existing Borrow record
-                $stmt_get_loan_data = $pdo->prepare("SELECT CopyID FROM Borrow WHERE BorrowID = ?");
+                // UPDATED: 'borrowing_record' table
+                $stmt_get_loan_data = $pdo->prepare("SELECT CopyID FROM borrowing_record WHERE BorrowID = ?");
                 $stmt_get_loan_data->execute([$borrowID]);
                 $requested_copyID = $stmt_get_loan_data->fetchColumn();
 
-                // 2. Check for an AVAILABLE COPY in the new Book_Copy table
-                $stmt_copy = $pdo->prepare("SELECT Status FROM Book_Copy WHERE CopyID = ?");
+                // 2. Check for an AVAILABLE COPY in the book_copy table
+                $stmt_copy = $pdo->prepare("SELECT Status FROM book_copy WHERE CopyID = ?");
                 $stmt_copy->execute([$requested_copyID]);
                 $copy_status = $stmt_copy->fetchColumn();
 
                 if ($copy_status === 'Available') {
 
-                    // 3. Update the Book_Copy Status
-                    $pdo->prepare("UPDATE Book_Copy SET Status = 'Borrowed' WHERE CopyID = ?")
+                    // 3. Update the book_copy Status
+                    $pdo->prepare("UPDATE book_copy SET Status = 'Borrowed' WHERE CopyID = ?")
                         ->execute([$requested_copyID]);
 
-                    // 4. Update the Borrow Record Status
-                    $pdo->prepare("UPDATE Borrow SET Status = 'Borrowed', ProcessedBy = ? WHERE BorrowID = ? AND Status = 'Reserved'")
+                    // 4. Update the borrowing_record Status
+                    // UPDATED: 'borrowing_record' table
+                    $pdo->prepare("UPDATE borrowing_record SET Status = 'Borrowed', ProcessedBy = ? WHERE BorrowID = ? AND Status = 'Reserved'")
                         ->execute([$staffID, $borrowID]);
 
-                    // 5. Log the action
-                    $logSql = "INSERT INTO Borrowing_Record (BorrowID, ActionType, ChangedBy) VALUES (?, 'Borrowed', ?)";
-                    $pdo->prepare($logSql)->execute([$borrowID, $staffID]);
+                    // 5. Log the action - COMMENTED OUT as old Audit table is removed/repurposed
+                    // $logSql = "INSERT INTO Borrowing_Record (BorrowID, ActionType, ChangedBy) VALUES (?, 'Borrowed', ?)";
+                    // $pdo->prepare($logSql)->execute([$borrowID, $staffID]);
 
                     $status_message = "Request #{$borrowID} APPROVED. Book successfully loaned and inventory updated.";
                     $error_type = 'success';
@@ -64,15 +66,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 }
 
             } elseif ($action === 'Reject') {
-                // 1. Update Borrow status to 'Rejected' (or 'Cancelled') and set processor
-                $pdo->prepare("UPDATE Borrow SET Status = 'Cancelled', ProcessedBy = ? WHERE BorrowID = ? AND Status = 'Reserved'")
+                // 1. Update borrowing_record status to 'Rejected' (or 'Cancelled') and set processor
+                // UPDATED: 'borrowing_record' table
+                $pdo->prepare("UPDATE borrowing_record SET Status = 'Cancelled', ProcessedBy = ? WHERE BorrowID = ? AND Status = 'Reserved'")
                     ->execute([$staffID, $borrowID]);
 
-                // 2. Log the action (Optional: create a new ActionType ENUM 'Rejected' for better tracking)
-                $logSql = "INSERT INTO Borrowing_Record (BorrowID, ActionType, ChangedBy) VALUES (?, 'Rejected', ?)";
-                $pdo->prepare($logSql)->execute([$borrowID, $staffID]);
-
-                // 3. Update book status if CopiesAvailable was decreased by a prior reservation logic (not needed here, as we assume reservation doesn't touch CopiesAvailable until approval).
+                // 2. Log the action - COMMENTED OUT
+                // $logSql = "INSERT INTO Borrowing_Record (BorrowID, ActionType, ChangedBy) VALUES (?, 'Rejected', ?)";
+                // $pdo->prepare($logSql)->execute([$borrowID, $staffID]);
 
                 $status_message = "Request #{$borrowID} REJECTED and closed.";
                 $error_type = 'error';
@@ -96,21 +97,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
 // --- 3. Fetch Pending Requests (Refreshed Data) ---
 try {
+    // UPDATED: Using 'borrowing_record' and 'book_copy'
     $sql = "
         SELECT 
-            B.BorrowID, B.CopyID,
+            B.BorrowID, B.CopyID, B.BookID,
             BK.Title, BK.ISBN, 
             U.UserID, U.Name AS BorrowerName, U.Role AS BorrowerRole,
             B.BorrowDate,
-            -- Get the actual BookID via the Book_Copy table for subsequent actions
-            BCPY.BookID, 
-            -- Calculate total available copies of this title for display
-            (SELECT COUNT(BC.CopyID) FROM Book_Copy BC 
-             WHERE BC.BookID = BCPY.BookID AND BC.Status = 'Available') AS CopiesAvailable
-        FROM Borrow B
-        JOIN Book_Copy BCPY ON B.CopyID = BCPY.CopyID -- Join to copy table
-        JOIN Book BK ON BCPY.BookID = BK.BookID        -- Join from copy table to book metadata
-        JOIN Users U ON B.UserID = U.UserID
+            (SELECT COUNT(BC.CopyID) FROM book_copy BC 
+             WHERE BC.BookID = B.BookID AND BC.Status = 'Available') AS CopiesAvailable
+        FROM borrowing_record B
+        JOIN book_copy BCPY ON B.CopyID = BCPY.CopyID 
+        JOIN book BK ON B.BookID = BK.BookID
+        JOIN users U ON B.UserID = U.UserID
         WHERE B.Status = 'Reserved' 
         ORDER BY B.BorrowDate ASC
     ";

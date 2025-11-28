@@ -34,12 +34,14 @@ $categories = [];
 
 // --- Fetch User Loan & Reservation Status ---
 // 1. Count currently borrowed books
-$stmt_borrowed = $pdo->prepare("SELECT COUNT(BorrowID) FROM Borrow WHERE UserID = ? AND Status = 'Borrowed'");
+// UPDATED: Using 'borrowing_record'
+$stmt_borrowed = $pdo->prepare("SELECT COUNT(BorrowID) FROM borrowing_record WHERE UserID = ? AND Status = 'Borrowed'");
 $stmt_borrowed->execute([$userID]);
 $borrowedCount = $stmt_borrowed->fetchColumn();
 
 // 2. Count active reservations
-$stmt_reserved = $pdo->prepare("SELECT COUNT(ReservationID) FROM Reservation WHERE UserID = ? AND Status = 'Active'");
+// UPDATED: Using 'borrowing_record' with Status='Reserved'
+$stmt_reserved = $pdo->prepare("SELECT COUNT(BorrowID) FROM borrowing_record WHERE UserID = ? AND Status = 'Reserved'");
 $stmt_reserved->execute([$userID]);
 $reservedCount = $stmt_reserved->fetchColumn();
 
@@ -48,18 +50,19 @@ $maxedOut = $totalActive >= $limitMax;
 
 try {
     // 1. Fetch unique categories
-    $categories = $pdo->query("SELECT DISTINCT Category FROM Book WHERE Category IS NOT NULL AND Category != '' ORDER BY Category ASC")->fetchAll(PDO::FETCH_COLUMN);
+    $categories = $pdo->query("SELECT DISTINCT Category FROM book WHERE Category IS NOT NULL AND Category != '' ORDER BY Category ASC")->fetchAll(PDO::FETCH_COLUMN);
 
     // 2. Define the dynamic calculation fields
+    // UPDATED subqueries to use new table names
     $dynamic_fields = "
         B.BookID, B.Title, B.Author, B.ISBN, B.Price, B.CoverImagePath, B.Status, B.Category,
-        (SELECT COUNT(BC1.CopyID) FROM Book_Copy BC1 WHERE BC1.BookID = B.BookID) AS CopiesTotal,
-        (SELECT COUNT(BC2.CopyID) FROM Book_Copy BC2 WHERE BC2.BookID = B.BookID AND BC2.Status = 'Available') AS CopiesAvailable,
-        (SELECT COUNT(R.ReservationID) FROM Reservation R WHERE R.BookID = B.BookID AND R.UserID = {$userID} AND R.Status = 'Active') AS HasActiveReservation
+        (SELECT COUNT(BC1.CopyID) FROM book_copy BC1 WHERE BC1.BookID = B.BookID) AS CopiesTotal,
+        (SELECT COUNT(BC2.CopyID) FROM book_copy BC2 WHERE BC2.BookID = B.BookID AND BC2.Status = 'Available') AS CopiesAvailable,
+        (SELECT COUNT(R.BorrowID) FROM borrowing_record R WHERE R.BookID = B.BookID AND R.UserID = {$userID} AND R.Status = 'Reserved') AS HasActiveReservation
     ";
 
     // 3. Build the Base SQL Query
-    $base_sql = "FROM Book B WHERE B.Status != 'Archived'";
+    $base_sql = "FROM book B WHERE B.Status != 'Archived'";
 
     // Apply Filters
     if ($status_filter !== 'All') {
@@ -112,11 +115,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['book_id'])) {
         $pdo->beginTransaction();
 
         // 1. Check Limit again
-        $stmt_chk_b = $pdo->prepare("SELECT COUNT(*) FROM Borrow WHERE UserID = ? AND Status = 'Borrowed'");
+        // UPDATED: Using 'borrowing_record'
+        $stmt_chk_b = $pdo->prepare("SELECT COUNT(*) FROM borrowing_record WHERE UserID = ? AND Status = 'Borrowed'");
         $stmt_chk_b->execute([$userID]);
         $curr_borrowed = $stmt_chk_b->fetchColumn();
 
-        $stmt_chk_r = $pdo->prepare("SELECT COUNT(*) FROM Reservation WHERE UserID = ? AND Status = 'Active'");
+        $stmt_chk_r = $pdo->prepare("SELECT COUNT(*) FROM borrowing_record WHERE UserID = ? AND Status = 'Reserved'");
         $stmt_chk_r->execute([$userID]);
         $curr_reserved = $stmt_chk_r->fetchColumn();
 
@@ -126,7 +130,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['book_id'])) {
             $pdo->rollBack();
         } else {
             // 2. Check duplicate reservation
-            $stmt_exists = $pdo->prepare("SELECT ReservationID FROM Reservation WHERE UserID = ? AND BookID = ? AND Status = 'Active'");
+            $stmt_exists = $pdo->prepare("SELECT BorrowID FROM borrowing_record WHERE UserID = ? AND BookID = ? AND Status = 'Reserved'");
             $stmt_exists->execute([$userID, $bookID]);
 
             if ($stmt_exists->fetch()) {
@@ -134,15 +138,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['book_id'])) {
                 $error_type = 'error';
                 $pdo->rollBack();
             } else {
-                // 3. Insert Reservation
-                $expiryDate = date('Y-m-d H:i:s', strtotime('+3 days'));
+                // 3. Find an Available Copy First
+                $stmt_copy = $pdo->prepare("SELECT CopyID FROM book_copy WHERE BookID = ? AND Status = 'Available' LIMIT 1");
+                $stmt_copy->execute([$bookID]);
+                $availableCopy = $stmt_copy->fetch();
 
-                $pdo->prepare("INSERT INTO Reservation (UserID, BookID, ExpiryDate, Status) VALUES (?, ?, ?, 'Active')")
-                    ->execute([$userID, $bookID, $expiryDate]);
+                if ($availableCopy) {
+                    $copyID = $availableCopy['CopyID'];
+                    // Use DueDate as a temporary placeholder for reservation expiry (3 days)
+                    $expiryDate = date('Y-m-d H:i:s', strtotime('+3 days'));
 
-                $status_message = "Success! A reservation has been placed. Please wait for staff approval.";
-                $error_type = 'success';
-                $pdo->commit();
+                    // UPDATED: INSERT into 'borrowing_record' with Status 'Reserved'
+                    $stmt_insert = $pdo->prepare("INSERT INTO borrowing_record (UserID, BookID, CopyID, DueDate, Status) VALUES (?, ?, ?, ?, 'Reserved')");
+                    $stmt_insert->execute([$userID, $bookID, $copyID, $expiryDate]);
+
+                    $status_message = "Success! A reservation has been placed. Please wait for staff approval.";
+                    $error_type = 'success';
+                    $pdo->commit();
+                } else {
+                    $status_message = "Error: No copies are currently available to reserve.";
+                    $error_type = 'error';
+                    $pdo->rollBack();
+                }
             }
         }
 

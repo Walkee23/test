@@ -24,18 +24,19 @@ $identifier = trim($_GET['book_identifier'] ?? '');
 
 /**
  * Fetches the currently active loan record based on the book's ISBN.
- * This query is complex as it must join across Book_Copy to get the Book metadata.
+ * This query is complex as it must join across book_copy to get the book metadata.
  */
 function getActiveLoanDetails($pdo, $identifier) {
+    // UPDATED: 'borrowing_record', 'book_copy', 'book', 'users'
     $sql = "
         SELECT 
             BO.BorrowID, BO.UserID, BO.CopyID, BO.BorrowDate, BO.DueDate, BO.Status AS LoanStatus,
             BK.Title, BK.ISBN, BK.Price, 
             U.Name AS BorrowerName, U.Role AS BorrowerRole
-        FROM Book BK
-        JOIN Book_Copy BCPY ON BK.BookID = BCPY.BookID
-        JOIN Borrow BO ON BCPY.CopyID = BO.CopyID
-        JOIN Users U ON BO.UserID = U.UserID
+        FROM book BK
+        JOIN book_copy BCPY ON BK.BookID = BCPY.BookID
+        JOIN borrowing_record BO ON BCPY.CopyID = BO.CopyID
+        JOIN users U ON BO.UserID = U.UserID
         WHERE BK.ISBN = ? AND BO.Status = 'Borrowed'
         LIMIT 1
     ";
@@ -84,14 +85,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $returnDate = date('Y-m-d H:i:s');
             
             // 1. Update the Borrow Record: Set ReturnDate and Status
-            $pdo->prepare("UPDATE Borrow SET Status = 'Returned', ReturnDate = ?, ProcessedBy = ? WHERE BorrowID = ? AND CopyID = ? AND Status = 'Borrowed'")
+            // UPDATED: 'borrowing_record' table
+            $pdo->prepare("UPDATE borrowing_record SET Status = 'Returned', ReturnDate = ?, ProcessedBy = ? WHERE BorrowID = ? AND CopyID = ? AND Status = 'Borrowed'")
                 ->execute([$returnDate, $staffID, $borrowID, $copyID]);
 
             // 2. Update the Book_Copy Status (Mark the specific physical item as available/damaged)
             // NOTE: Condition handling is simplified. 'major_damage' copies should be marked 'Damaged'
             $newCopyStatus = ($condition === 'major_damage') ? 'Damaged' : 'Available';
             
-            $pdo->prepare("UPDATE Book_Copy SET Status = ? WHERE CopyID = ?")
+            $pdo->prepare("UPDATE book_copy SET Status = ? WHERE CopyID = ?")
                 ->execute([$newCopyStatus, $copyID]);
                 
             // 3. Handle Penalties (If the calculated fee is greater than zero)
@@ -99,13 +101,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 $penaltyStatus = ($paymentStatus === 'Paid') ? 'Paid' : 'Pending';
                 
                 // If a fee is due, we create a Penalty record
-                $pdo->prepare("INSERT INTO Penalty (BorrowID, UserID, AmountDue, Status) VALUES (?, ?, ?, ?)")
+                // UPDATED: 'penalty' table
+                $pdo->prepare("INSERT INTO penalty (BorrowID, UserID, AmountDue, Status) VALUES (?, ?, ?, ?)")
                     ->execute([$borrowID, $userID, $finalPenalty, $penaltyStatus]);
             }
             
-            // 4. Log the Return Action
-            $logSql = "INSERT INTO Borrowing_Record (BorrowID, ActionType, ChangedBy) VALUES (?, 'Returned', ?)";
-            $pdo->prepare($logSql)->execute([$borrowID, $staffID]);
+            // 4. Log the Return Action - COMMENTED OUT as old Audit table is gone
+            // $logSql = "INSERT INTO Borrowing_Record (BorrowID, ActionType, ChangedBy) VALUES (?, 'Returned', ?)";
+            // $pdo->prepare($logSql)->execute([$borrowID, $staffID]);
 
             $pdo->commit();
             $status_message = "Return finalized! Copy marked as {$newCopyStatus}. Penalty status: {$paymentStatus}.";
